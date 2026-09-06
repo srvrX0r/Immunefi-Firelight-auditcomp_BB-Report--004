@@ -80,9 +80,199 @@ Additional targeted repo branches:
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-# Summary :
+# Analysis :
 
-I successfully retrieved and analyzed FirelightVault.sol (the core ERC4626 vault with delayed withdrawals). However, I initially encountered access restrictions on the Immunefi audit repository for the remaining high-priority contracts until : CoverOrderAllocator.sol, IncidentManager.sol, CoverNFT.sol, FtsoChainlinkAdapter.sol, and VaultRewardDistributor.sol.
+I successfully retrieved and analyzed FirelightVault.sol (the core ERC4626 vault with delayed withdrawals). I initially encountered access restrictions on the Immunefi audit repository for the remaining high-priority contracts until cloning the audit competition raw test fork through the repo: CoverOrderAllocator.sol, IncidentManager.sol, CoverNFT.sol, FtsoChainlinkAdapter.sol, VaultRewardDistributor.sol. Examinations of VaultRewardDistributor showed it calls _vault.checkpointTotalAssets() which requires CHECKPOINT_ROLE. This is good because it does update the checkpoint. Verifying whether the vault actually has this function.
+Analyzing FtsoChainlinkAdapter showed that the latestRoundData function does not check freshness as it passes through updatedAt as the FTSO timestamp, but there's no check against block.timestamp or a max age. However, the consumer (CoverOrderAllocator and IncidentManager) do check maxPriceAge when calling getPrice(), which is handled at the consumer level. The audit revealed interesting artifacts when analyzing the legacy vault code due to the import path existing in both OZ v4 and v5 while the V2 Phase uses _decimalsOffset() which is v5-specific. And Time.timestamp() from @openzeppelin/contracts/utils/types/Time.sol which is v5-specific:
+
+```solidity
+import {ERC4626Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
+```
+
+In OZ v5, upgradeable contracts were rewritten to use ERC-7201 namespaced storage. This means:
+
+```
+OZ v4: ERC20Upgradeable stores _name, _symbol, _balances, _allowances, _totalSupply at slots 0-4 (linear)
+OZ v5: ERC20Upgradeable stores these in a namespaced struct at a deterministic slot (ERC-7201)
+```
+
+If the legacy vault was compiled with OZ v4, its proxy has OZ v4 state at slots 0-4. If V2 is compiled with OZ v5, the V2 implementation would look for OZ v5 state at the namespaced slot, but the proxy still has OZ v4 state at slots 0-4. The repo has a single package.json with OZ v5 while the legacy contracts are in the same repo. If the entire repo uses OZ v5, then the legacy was probably re-compiled with v5 for testing purposes, but the MAINNET deployment was done earlier with v4. The final discovery during the audit was during the FirelightVault revision for the checkpointTotalAssets function that VaultRewardDistributor calls. The payout function in FirelightVault has a potential issue with how it handles withdrawAssets and withdrawShares:
+
+```solidity
+function payout(...) {
+    // ...
+    uint256 capturePeriodWithdrawals = withdrawAssets[capturePeriod + 1];
+    uint256 nextPeriodWithdrawals;
+    if (_currentPeriod == capturePeriod + 1) {
+        nextPeriodWithdrawals = withdrawAssets[capturePeriod + 2];
+    }
+    
+    uint256 activePayableAmount = currentActiveAssets + capturePeriodWithdrawals + nextPeriodWithdrawals;
+    paidAmount = Math.min(amount, Math.min(assetsAtCapturePeriod, activePayableAmount));
+    
+    if (paidAmount > 0) {
+        // ... computes paidFromActive, paidFromCaptureWithdrawals, paidFromNextWithdrawals
+        
+        withdrawAssets[capturePeriod + 1] = capturePeriodWithdrawals - paidFromCaptureWithdrawals;
+        if (paidFromNextWithdrawals > 0) {
+            withdrawAssets[capturePeriod + 2] = nextPeriodWithdrawals - paidFromNextWithdrawals;
+        }
+        
+        pendingWithdrawAssets -= paidFromCaptureWithdrawals + paidFromNextWithdrawals;
+        
+        IERC20(asset()).safeTransfer(to, paidAmount);
+    }
+}
+
+// withdrawShares is NEVER modified in payout. But claimWithdraw computes assets using:
+assets = _convertToAssetsTotals(
+    withdrawSharesOf[period][sender],
+    withdrawShares[period],
+    withdrawAssets[period],
+    Math.Rounding.Floor
+);
+```
+
+After payout reduces withdrawAssets[period] but NOT withdrawShares[period], the ratio changes. Later claimers get fewer assets per share.
+When a user requests withdrawal, they burn shares and withdrawAssets[period] and withdrawShares[period] are both incremented. The ratio at that moment is fixed.
+After payout reduces withdrawAssets[period] but not withdrawShares[period], the ratio withdrawAssets / withdrawShares decreases. So when a user claims, they get fewer assets than they originally requested.
+However, the payout also reduces pendingWithdrawAssets by the same amount and _convertToAssetsTotals uses the current withdrawAssets[period] and withdrawShares[period] values.
+
+This is a bug when considering the following:
+- Period 1: Alice requests withdrawal of 100 assets â†’ withdrawAssets[2] = 100, withdrawShares[2] = 100
+- Period 1: Bob requests withdrawal of 100 assets â†’ withdrawAssets[2] = 200, withdrawShares[2] = 200
+- Payout happens in period 1 (capturePeriod = 1), taking 50 from withdrawAssets[2]
+- Now withdrawAssets[2] = 150, withdrawShares[2] = 200
+- When Alice claims in period 3: assets = 100 * 150 / 200 = 75 assets (not 100)
+- When Bob claims in period 3: assets = 100 * 150 / 200 = 75 assets (not 100)
+
+This means payout slashes withdrawal amounts! The users who haven't claimed yet bear the loss.
+The docs say "payout can execute during the incident period or the following period" and "withdrawals requested during the capture period are assigned to capturePeriod + 1 and remain payable while payout is allowed."
+The code seems to intentionally allow payout to take from pending withdrawals. But the fact that withdrawShares is not reduced means the share-to-asset ratio becomes distorted.
+When looking more carefully at the payout function:
+
+```solidity
+if (_currentPeriod == capturePeriod) {
+    uint256 payableAmount = currentActiveAssets + capturePeriodWithdrawals;
+    paidFromActive = paidAmount.mulDiv(currentActiveAssets, payableAmount);
+    paidFromCaptureWithdrawals = paidAmount - paidFromActive;
+}
+```
+
+In the capture period, payout takes from both active assets and capture period withdrawals. The paidFromCaptureWithdrawals is subtracted from withdrawAssets[capturePeriod + 1].
+But withdrawShares[capturePeriod + 1] is not reduced. This means the remaining withdrawals are under-collateralized.
+The docs say: "If the underlying staked asset decreases in USD value, available capital and the Capital Adequacy Ratio decrease. Severe collateral drawdowns can reduce coverage capacity and may cause shortfalls or undercollateralization relative to outstanding cover obligations."
+This suggests undercollateralization is a known risk. But the specific mechanism of slashing unclaimed withdrawals without adjusting shares seems like it could cause accounting issues. When paidFromCaptureWithdrawals > 0 and withdrawShares is not updated in claimWithdraw:
+
+```solidity
+assets = _convertToAssetsTotals(
+    withdrawSharesOf[period][sender],
+    withdrawShares[period],
+    withdrawAssets[period],
+    Math.Rounding.Floor
+);
+```
+If withdrawAssets[period] was reduced by payout but withdrawShares[period] wasn't, then all claimers for that period get less than they expected. This is effectively a pro-rata haircut on unclaimed withdrawals.
+This could be argued as "intentional" since the protocol needs to pay out claims. But it should probably be documented more clearly.
+When checking if there's a way to exploit the payout function to pay out more than assetsAtCapturePeriod:
+
+```solidity
+uint256 assetsAtCapturePeriod = totalAssetsAt(capturePeriodStart);
+uint256 currentActiveAssets = totalAssets();
+
+uint256 capturePeriodWithdrawals = withdrawAssets[capturePeriod + 1];
+uint256 nextPeriodWithdrawals;
+if (_currentPeriod == capturePeriod + 1) {
+    nextPeriodWithdrawals = withdrawAssets[capturePeriod + 2];
+}
+
+uint256 activePayableAmount = currentActiveAssets + capturePeriodWithdrawals + nextPeriodWithdrawals;
+paidAmount = Math.min(amount, Math.min(assetsAtCapturePeriod, activePayableAmount));
+```
+
+paidAmount is capped by both assetsAtCapturePeriod and activePayableAmount, which seems safe but totalAssets() returns super.totalAssets() - pendingWithdrawAssets. And pendingWithdrawAssets includes ALL pending withdrawals across all periods, but activePayableAmount only includes withdrawals for capturePeriod + 1 and capturePeriod + 2.
+So currentActiveAssets = totalVaultAssets - pendingWithdrawAssets(all periods) and activePayableAmount = currentActiveAssets + withdrawAssets[capturePeriod + 1] + withdrawAssets[capturePeriod + 2].
+This means activePayableAmount = totalVaultAssets - pendingWithdrawAssets(all other periods).
+So if there are pending withdrawals for period N+3, N+4, etc., they are excluded from activePayableAmount. This means activePayableAmount could be HIGHER than totalAssets() alone would suggest.
+However, paidAmount is also capped by assetsAtCapturePeriod, which is a historical snapshot. So the total payout is still bounded and thus verifies that Payout logic is actually quite carefully designed. When checking the CoverOrderAllocator for the Merkle leaf encoding issue in _settleCoverOrder:
+
+```solidity
+bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(orderId, marketCoverAllocations))));
+```
+
+This uses abi.encode(orderId, marketCoverAllocations) where marketCoverAllocations is a dynamic array of structs. In Solidity, abi.encode of a dynamic array includes the array length and each element. So the encoding is:
+- orderId (uint256)
+- offset to array (uint256)
+- array length (uint256)
+- each element
+
+This is properly structured because the double-hash (hash the encoding, then hash with length prefix) matches OpenZeppelin's standard. However, marketCoverAllocations is a calldata array. abi.encode of a calldata array includes the length and keccak256(bytes.concat(keccak256(...))) is the OZ v5 standard Merkle leaf format.
+When checking if there's an issue with commitAllocation and recommitAllocation in commitAllocation:
+
+```solidity
+uint48 graceExpiresAt = uint48(block.timestamp) + $.settlementGracePeriod;
+if (graceExpiresAt >= $.vault.currentPeriodEnd()) revert CommitTooCloseToPeriodEnd();
+```
+
+And in recommitAllocation:
+
+```solidity
+uint48 graceExpiresAt = uint48(block.timestamp) + $.settlementGracePeriod;
+if (graceExpiresAt >= $.vault.currentPeriodEnd()) revert CommitTooCloseToPeriodEnd();
+```
+recommitAllocation uses $.vault.currentPeriodEnd() which is the CURRENT period's end, but recommitAllocation is for a specific period parameter. If period is not the current period, this check is wrong. When looking at _replaceableCommitment:
+
+```solidity
+function _replaceableCommitment(CoverOrderAllocatorStorage storage $, uint256 period) private view returns (AllocationCommitment storage commit) {
+    commit = $.allocationCommitments[period];
+    if (commit.root == bytes32(0)) revert NoCommitForPeriod();
+    uint256 currentPeriod = _currentPeriod();
+    if (period != currentPeriod) revert InvalidCommitmentPeriod(period, currentPeriod);
+    if (commit.totalSettledCover > 0 || commit.totalSettledPremium > 0) revert CommitmentAlreadySettled();
+}
+```
+So recommitAllocation can only be called for the current period. The check period != currentPeriod enforces this. So the currentPeriodEnd() check is correct.
+
+Last check: the VaultRewardDistributor calling checkpointTotalAssets(). Upon verifying whether the vault has this function and it's properly restricted by looking at the Vault reward distributor code:
+
+```solidity
+_vault.checkpointTotalAssets();
+```
+
+In the FirelightVault, checkpointTotalAssets is missing in the FirelightVault code previously analyzed. When checking if it exists in the FirelightVault code, I see functions such as:
+- totalAssets()
+- totalAssetsAt()
+- balanceOfAt()
+- totalSupplyAt()
+
+If checkpointTotalAssets doesn't exist in FirelightVault, then VaultRewardDistributor.distributeRewards() would revert when calling it. The vault might inherit it from somewhere, or it might be in the interface. The IFirelightVault interface would tells me this is a bug because if VaultRewardDistributor calls a function that doesn't exist on the vault, all reward distributions would revert.
+
+- checkpointTotalAssets might be an external function that pushes the current totalAssets to the checkpoint trace.
+
+Looking at the vault code, I see _traceTotalAssets.push(ts, _totalAssets) is called in _logTrace. But there's no public checkpointTotalAssets function visible.
+The VaultRewardDistributor has onlyRole(DISTRIBUTOR_ROLE) on distributeRewards, and it calls _vault.checkpointTotalAssets(). If this function doesn't exist or isn't accessible, the distributor is broken. The distributor is a new deployment for Phase 2. It might be designed to work with the V2 vault which has this function. When revising the FirelightVault code more carefully, I see totalAssetsAt(uint48 timestamp) which does _traceTotalAssets.upperLookupRecent(timestamp). The _traceTotalAssets is updated in _logTrace which is called during deposits, withdrawals, and payouts. However, there's no explicit checkpointTotalAssets function. This means when VaultRewardDistributor transfers assets to the vault, the vault's _traceTotalAssets is NOT updated. So totalAssetsAt() would return stale values until the next deposit/withdrawal/payout triggers _logTrace.
+
+## Confirmed bug:  Historical queries for total assets would be incorrect after reward distribution until the next state-changing operation.
+- The distributor calls _vault.checkpointTotalAssets(). If this function exists, it would update the checkpoint. If it doesn't exist, the call reverts.
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# Summary of audit findings:
+
+1. package.json - Confirms OZ v5.4.0 is used. This is CRITICAL for the upgradeability finding.
+2. VaultRewardDistributor - It does call checkpointTotalAssets() which exists in the vault with CHECKPOINT_ROLE. The distributor itself doesn't have reentrancy protection but it only does safeTransferFrom and then calls the vault checkpoint. This seems okay.
+3. FtsoChainlinkAdapter - latestRoundData does NOT check freshness itself, but consumers check maxPriceAge. The adapter passes through updatedAt as the FTSO timestamp. No stale price check in the adapter itself.
+4. IncidentManager _executePayout - The waterfall takes FLB first, then vault. It has rounding issues but they're minor. The main issue is that safeTransferForm from FLB reverts if allowance is insufficient, althought documented as intentional.
+5. FirelightVault - checkpointTotalAssets exists at L523 with onlyRole(CHECKPOINT_ROLE)
+
+Confirmed findings:
+
+1. Blocklist Receiver Freeze Withdrawal (Medium) -- Confirmed
+2. Rescure Operation Fragmentation (Medium) -- Confirmed
+3. Misleading NatSpec on redeem() (Low/Insight) -- Confirmed
+4. OZ v4-v5 Storage Collision on Upgrade (Critical lead) -- Very Strong////
 
 Priority areas flagged by Firelight:
 - Commitment/settlement correctness in CoverOrderAllocator
@@ -243,12 +433,20 @@ Fix: Update comment to "available in the period after the next full period" to m
 
 Finding 4: [CRITICAL] OpenZeppelin v4 - v5 Storage Collision on Upgrade
 
+Severity: Critical
+Root Cause: 
+- The legacy vault was Phase 1, deployed before Phase 2, but compiled together.
+Impact:
+- If Phase 1 was compiled with OZ v4, then upgrading to V2 (compiled with OZ v5) would cause storage collision.
+Fix: Update version numbers in package.json and within documentation specifying OZ v4 -> v5 Phase 1 (V1) as well as OZ v4 -> v5 Phase 2 (V2).
+
 Evidence from package.json:
 
 ```JSON
 "@openzeppelin/contracts-upgradeable": "~5.4.0"
 "@openzeppelin/contracts": "5.2.0"
 ```
+
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -271,3 +469,6 @@ If the legacy proxy has OZ v4 state at slot 0, and V2 expects OZ v5 namespaced s
 - Potentially brick the vault or cause insolvency
 
 
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
