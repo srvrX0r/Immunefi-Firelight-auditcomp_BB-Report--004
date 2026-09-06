@@ -438,6 +438,7 @@ Root Cause:
 - The legacy vault was Phase 1, deployed before Phase 2, but compiled together.
 Impact:
 - If Phase 1 was compiled with OZ v4, then upgrading to V2 (compiled with OZ v5) would cause storage collision.
+
 Fix: Update version numbers in package.json and within documentation specifying OZ v4 -> v5 Phase 1 (V1) as well as OZ v4 -> v5 Phase 2 (V2).
 
 Evidence from package.json:
@@ -446,13 +447,6 @@ Evidence from package.json:
 "@openzeppelin/contracts-upgradeable": "~5.4.0"
 "@openzeppelin/contracts": "5.2.0"
 ```
-
------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-# The Problem:
-
 The Phase 1 legacy vault proxy is deployed on Flare mainnet. If it was originally compiled with OpenZeppelin v4 (extremely likely for a predeposit vault), its storage layout has OZ v4 state variables at linear slots 0-4.
 
 The V2 FirelightVault uses OZ v5-specific features:
@@ -468,6 +462,11 @@ If the legacy proxy has OZ v4 state at slot 0, and V2 expects OZ v5 namespaced s
 - Misalign all FirelightVaultStorage variables
 - Potentially brick the vault or cause insolvency
 
+
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
