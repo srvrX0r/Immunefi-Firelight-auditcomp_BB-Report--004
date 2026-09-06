@@ -29,7 +29,7 @@ Insights are rewarded according to Immunefi's Standardized Competition Reward Te
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Auditing Information for Report #004:
+# Auditing Information for Report--004:
 
 The following security audit was performed in collaboration with @dhasirar during week 1 of the program commencement.
 
@@ -76,10 +76,13 @@ Additional targeted repo branches:
 - contracts/interfaces/ICoverOrderAllocator.sol
 - contracts/interfaces/IFirelightVault.sol
 
-++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-Summary :
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-I successfully retrieved and analyzed FirelightVault.sol (the core ERC4626 vault with delayed withdrawals). However, I initially encountered access restrictions on the Immunefi audit repository for the remaining high-priority contracts: CoverOrderAllocator.sol, IncidentManager.sol, CoverNFT.sol, FtsoChainlinkAdapter.sol, and VaultRewardDistributor.sol.
+# Summary :
+
+I successfully retrieved and analyzed FirelightVault.sol (the core ERC4626 vault with delayed withdrawals). However, I initially encountered access restrictions on the Immunefi audit repository for the remaining high-priority contracts until : CoverOrderAllocator.sol, IncidentManager.sol, CoverNFT.sol, FtsoChainlinkAdapter.sol, and VaultRewardDistributor.sol.
 
 Priority areas flagged by Firelight:
 - Commitment/settlement correctness in CoverOrderAllocator
@@ -129,8 +132,12 @@ Impact: Storage collision during proxy upgrade could corrupt vault state, leadin
 Recommendation: Publish the legacy storage contract for diff review. Verify using OpenZeppelin's upgrade-safe validation tools.
 
 
-++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-## Files retrieved from repository clone:
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# Files retrieved from repository clone:
+
 1. package.json 
 - Findings: OZ v5.4.0 confirmed — Critical for upgrade collision analysis
 2. VaultRewardDistributor.sol
@@ -139,16 +146,6 @@ Recommendation: Publish the legacy storage contract for diff review. Verify usin
 - No on-chain freshness check (consumer-side only) — design choice, not a bug
 4. IncidentManager._executePayout
 - FLB waterfall logic reviewed — rounding is minor, no critical flaw found
-
-PoC Submission:
-- Runnable PoC for all severities submitted, thus create Foundry test file that demo's each bug:
-
-```plain
-poc/
-|__ FirelightVault.BlocklistedReceiver.t.sol
-|__ FirelightVault.RescueFragmentation.t.sol
-|__ FirelightVault.MisleadingNatSpec.md
-```
 
 
 Finding 1: [MEDIUM] Blocklisted Receiver Permanently Freezes Withdrawal
@@ -252,6 +249,9 @@ Evidence from package.json:
 "@openzeppelin/contracts-upgradeable": "~5.4.0"
 "@openzeppelin/contracts": "5.2.0"
 ```
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # The Problem:
 
