@@ -1,0 +1,1 @@
+!cd /tmp && curl -L -o firelight.zip "https://github.com/immunnefi-team/audit-comp-firelight/archive/refs/heads/v1_audit_ready.zip" 2>&1 | tail -10

@@ -1,0 +1,1 @@
+rm -rf /tmp/firelight && git clone --depth 1 --branch v1_audit_ready https://github.com/immunefi-team/audit-comp-firelight.git /tmp/firelight 2>&1 | tail -20

@@ -1,0 +1,1 @@
+git clone --depth 1 https://github.com/immunefi-team/audit-comp-firelight.git /tmp/firelight 2>&1 | head -50
