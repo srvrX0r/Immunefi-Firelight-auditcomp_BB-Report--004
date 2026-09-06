@@ -33,7 +33,7 @@ Auditing Information for Report #004:
 
 The following security audit was performed in collaboration with @dhasirar during week 1 of the program commencement.
 
-##Preconfiguration##
+##Pre-configuration##
 
 URL to fetch repo:
 - "https://github.com/immunefi-team/audit-comp-firelight"
@@ -77,7 +77,7 @@ Additional targeted repo branches:
 - contracts/interfaces/IFirelightVault.sol
 
 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-Summary #1:
+Summary :
 
 I successfully retrieved and analyzed FirelightVault.sol (the core ERC4626 vault with delayed withdrawals). However, I initially encountered access restrictions on the Immunefi audit repository for the remaining high-priority contracts: CoverOrderAllocator.sol, IncidentManager.sol, CoverNFT.sol, FtsoChainlinkAdapter.sol, and VaultRewardDistributor.sol.
 
